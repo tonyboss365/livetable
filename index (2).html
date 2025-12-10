@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Live Timetable — Single File</title>
+
+  <!-- Tailwind CDN (quick) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <style>
+    /* small extras for modals & toast */
+    .backdrop { backdrop-filter: blur(6px); }
+    .toast {
+      position: fixed; right: 20px; bottom: 20px;
+      background: rgba(0,0,0,0.8); color: white; padding: 10px 14px;
+      border-radius: 8px; box-shadow: 0 6px 18px rgba(0,0,0,.2);
+      z-index: 60; font-size: 14px;
+    }
+  </style>
+</head>
+<body class="bg-gradient-to-br from-sky-50 to-violet-50 min-h-screen p-6">
+
+  <div class="max-w-6xl mx-auto">
+    <header class="flex items-center justify-between mb-6">
+      <div>
+        <h1 class="text-3xl font-extrabold">Live Timetable</h1>
+        <p class="text-sm text-gray-600">Single-file version — saves to browser and can POST reminders to a webhook.</p>
+      </div>
+      <div class="flex gap-3 items-center">
+        <button id="addBtn" class="px-4 py-2 bg-violet-600 text-white rounded-lg shadow">Add Class</button>
+        <button id="notifyPermission" class="px-4 py-2 border rounded-lg">Enable Notifications</button>
+        <button id="testWebhook" class="px-3 py-2 border rounded text-sm">Test Webhook</button>
+      </div>
+    </header>
+
+    <main class="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <section id="calendar" class="col-span-2"></section>
+
+      <aside class="space-y-4">
+        <div class="bg-white p-4 rounded-2xl shadow">
+          <h4 class="font-semibold">Settings</h4>
+          <div class="mt-3 space-y-2 text-sm">
+            <label class="block">Reminder (minutes before)</label>
+            <input id="offsetInput" type="number" min="1" value="10" class="w-full border p-2 rounded" />
+
+            <label class="block mt-2">Webhook URL (IFTTT / Twilio / Vercel)</label>
+            <input id="webhookInput" placeholder="https://example.com/webhook" class="w-full border p-2 rounded" />
+
+            <label class="block mt-2">Secret token (x-tt-secret)</label>
+            <input id="secretInput" placeholder="optional" class="w-full border p-2 rounded" />
+
+            <div class="mt-2 text-xs text-gray-500">
+              When a reminder fires the app POSTs JSON to your webhook. Use a server to turn that into SMS/WhatsApp.
+            </div>
+
+            <div class="mt-3 flex gap-2">
+              <button id="clearStorage" class="px-3 py-1 border rounded">Clear Storage</button>
+              <button id="exportJson" class="px-3 py-1 border rounded">Export JSON</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-white p-4 rounded-2xl shadow text-sm">
+          <h4 class="font-semibold">Quick tips</h4>
+          <ul class="list-disc ml-5 mt-2 text-gray-600">
+            <li>Enable notifications and keep the tab open for in-page reminders.</li>
+            <li>Use IFTTT or Twilio on the webhook to receive messages when the page is closed.</li>
+            <li>Local edits persist in this browser via localStorage.</li>
+          </ul>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="mt-8 text-center text-xs text-gray-500">Single-file • Deploy on GitHub Pages by uploading index.html</footer>
+  </div>
+
+  <!-- Modal containers -->
+  <div id="modalRoot"></div>
+  <div id="toastRoot"></div>
+
+<script>
+/* Single-file Live Timetable
+   - Saves to localStorage keys:
+     - live-timetable-classes
+     - live-timetable-webhook
+     - live-timetable-offset
+     - live-timetable-secret
+   - Scheduling: setTimeout for next occurrence (re-schedules weekly)
+   - Post to webhook when reminder fires
+*/
+
+/* ---------- Configuration & initial data ---------- */
+
+const profMap = {
+  networks: 'Sheik Asif',
+  algorithms: 'Purushotham',     // DAA
+  optimization: 'Y Satyna Narayana',
+  fullstack: 'Dwarakanath',
+  datastruct: 'Subbarayadu',
+  cloud: 'Raghavendra',
+  logic: 'Nithin'
+};
+
+const initialClasses = [
+  { id: 'm1', subject: 'Computer Networks', type: 'Practical', room: 'HC-15C', day: 'Monday', start: '08:10', end: '09:00' },
+  { id: 'm2', subject: 'Computer Networks', type: 'Practical', room: 'HC-15C', day: 'Monday', start: '09:00', end: '09:50' },
+  { id: 'm3', subject: 'Mathematical Optimization', type: 'Lecture', room: 'H103', day: 'Monday', start: '10:00', end: '10:50' },
+  { id: 'm4', subject: 'Mathematical Optimization', type: 'Lecture', room: 'H103', day: 'Monday', start: '10:50', end: '11:40' },
+  { id: 'm5', subject: 'Design & Analysis of Algorithms', type: 'Lecture', room: 'H006', day: 'Monday', start: '11:50', end: '12:40' },
+  { id: 'm7', subject: 'Full Stack App Dev', type: 'Skill', room: 'H103', day: 'Monday', start: '13:20', end: '14:10' },
+  { id: 'm8', subject: 'Full Stack App Dev', type: 'Skill', room: 'H103', day: 'Monday', start: '14:10', end: '15:00' },
+
+  { id: 't1', subject: 'Advanced Data Structures', type: 'Practical', room: 'H007', day: 'Tuesday', start: '08:10', end: '09:00' },
+  { id: 't2', subject: 'Advanced Data Structures', type: 'Practical', room: 'H007', day: 'Tuesday', start: '09:00', end: '09:50' },
+  { id: 't3', subject: 'Computer Networks', type: 'Lecture', room: 'H103', day: 'Tuesday', start: '10:00', end: '10:50' },
+  { id: 't4', subject: 'Computer Networks', type: 'Lecture', room: 'H103', day: 'Tuesday', start: '10:50', end: '11:40' },
+  { id: 't5', subject: 'Design & Analysis of Algorithms', type: 'Skill', room: 'H103', day: 'Tuesday', start: '11:50', end: '12:40' },
+  { id: 't7', subject: 'Design & Analysis of Algorithms', type: 'Skill', room: 'H103', day: 'Tuesday', start: '13:20', end: '14:10' },
+
+  { id: 'w1', subject: 'Full Stack App Dev', type: 'Skill', room: 'HC-14C', day: 'Wednesday', start: '08:10', end: '09:00' },
+  { id: 'w2', subject: 'Full Stack App Dev', type: 'Skill', room: 'HC-14C', day: 'Wednesday', start: '09:00', end: '09:50' },
+  { id: 'w3', subject: 'Cloud Infrastructure & Services', type: 'Lecture', room: 'H107', day: 'Wednesday', start: '10:00', end: '10:50' },
+  { id: 'w4', subject: 'Cloud Infrastructure & Services', type: 'Lecture', room: 'H107', day: 'Wednesday', start: '10:50', end: '11:40' },
+
+  { id: 'th1', subject: 'Advanced Data Structures', type: 'Lecture', room: 'H305', day: 'Thursday', start: '08:10', end: '09:00' },
+  { id: 'th2', subject: 'Advanced Data Structures', type: 'Lecture', room: 'H305', day: 'Thursday', start: '09:00', end: '09:50' },
+  { id: 'th3', subject: 'Design & Analysis of Algorithms', type: 'Lecture', room: 'H006', day: 'Thursday', start: '10:00', end: '10:50' },
+  { id: 'th4', subject: 'Design & Analysis of Algorithms', type: 'Lecture', room: 'H006', day: 'Thursday', start: '10:50', end: '11:40' },
+  { id: 'th5', subject: 'Global Logic Contest Practicum', type: 'Skill', room: 'HC-14C', day: 'Thursday', start: '11:50', end: '12:40' },
+  { id: 'th7', subject: 'Cloud Infrastructure & Services', type: 'Skill', room: 'H005', day: 'Thursday', start: '13:20', end: '14:10' },
+  { id: 'th8', subject: 'Cloud Infrastructure & Services', type: 'Skill', room: 'H005', day: 'Thursday', start: '14:10', end: '15:00' },
+
+  { id: 'f1', subject: 'Mathematical Optimization', type: 'Tutorial', room: 'H102', day: 'Friday', start: '08:10', end: '09:00' },
+  { id: 'f2', subject: 'Mathematical Optimization', type: 'Tutorial', room: 'H102', day: 'Friday', start: '09:00', end: '09:50' },
+  { id: 'f3', subject: 'Full Stack App Dev', type: 'Lecture', room: 'H103', day: 'Friday', start: '10:00', end: '10:50' },
+  { id: 'f4', subject: 'Design & Analysis of Algorithms', type: 'Practical', room: 'H004', day: 'Friday', start: '10:50', end: '11:40' },
+  { id: 'f5', subject: 'Design & Analysis of Algorithms', type: 'Practical', room: 'H004', day: 'Friday', start: '11:50', end: '12:40' },
+
+  { id: 's1', subject: 'Cloud Infrastructure & Services', type: 'Practical', room: 'H007', day: 'Saturday', start: '08:10', end: '09:00' },
+  { id: 's2', subject: 'Cloud Infrastructure & Services', type: 'Practical', room: 'H007', day: 'Saturday', start: '09:00', end: '09:50' },
+  { id: 's3', subject: 'Cloud Infrastructure & Services', type: 'Lecture', room: 'H107', day: 'Saturday', start: '10:00', end: '10:50' },
+  { id: 's5', subject: 'Computer Networks', type: 'Lecture', room: 'H006', day: 'Saturday', start: '11:50', end: '12:40' },
+  { id: 's7', subject: 'Global Logic Contest Practicum', type: 'Skill', room: 'H305', day: 'Saturday', start: '13:20', end: '14:10' }
+];
+
+const DAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+let classes = [];           // runtime copy
+let timers = {};            // id -> timeout
+const KEY = 'live-timetable-classes';
+const WH_KEY = 'live-timetable-webhook';
+const OFF_KEY = 'live-timetable-offset';
+const SEC_KEY = 'live-timetable-secret';
+
+/* ---------- Utilities ---------- */
+
+function mapProfessorBySubject(subject='') {
+  const s = subject.toLowerCase();
+  if (s.includes('network')) return profMap.networks;
+  if (s.includes('algorithm')) return profMap.algorithms;
+  if (s.includes('optimization')) return profMap.optimization;
+  if (s.includes('full stack') || s.includes('fullstack')) return profMap.fullstack;
+  if (s.includes('data structure') || s.includes('datastruct') || s.includes('data')) return profMap.datastruct;
+  if (s.includes('cloud')) return profMap.cloud;
+  if (s.includes('logic') || s.includes('contest')) return profMap.logic;
+  return '';
+}
+
+function showToast(text, timeout=3000) {
+  const r = document.getElementById('toastRoot');
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = text;
+  r.appendChild(el);
+  setTimeout(()=> el.remove(), timeout);
+}
+
+/* ---------- Storage & initialisation ---------- */
+
+function loadSettingsToUI() {
+  const wh = localStorage.getItem(WH_KEY) || '';
+  const sec = localStorage.getItem(SEC_KEY) || '';
+  const off = localStorage.getItem(OFF_KEY) || '10';
+  document.getElementById('webhookInput').value = wh;
+  document.getElementById('secretInput').value = sec;
+  document.getElementById('offsetInput').value = off;
+}
+
+function saveSettingsFromUI() {
+  localStorage.setItem(WH_KEY, document.getElementById('webhookInput').value.trim());
+  localStorage.setItem(SEC_KEY, document.getElementById('secretInput').value.trim());
+  localStorage.setItem(OFF_KEY, String(document.getElementById('offsetInput').value));
+}
+
+/* read classes from storage or seed initial */
+function loadClasses() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(KEY) || 'null');
+    if (saved && saved.length) {
+      classes = saved.map(c => ({
+        ...c,
+        professor: c.professor || mapProfessorBySubject(c.subject) || '',
+        lecturer: c.lecturer || c.professor || mapProfessorBySubject(c.subject) || ''
+      }));
+    } else {
+      classes = initialClasses.map(c => ({
+        ...c,
+        professor: c.professor || mapProfessorBySubject(c.subject) || '',
+        lecturer: c.lecturer || mapProfessorBySubject(c.subject) || ''
+      }));
+      localStorage.setItem(KEY, JSON.stringify(classes));
+    }
+  } catch(e) {
+    classes = initialClasses.slice();
+  }
+}
+
+/* persist */
+function saveClasses() {
+  try {
+    localStorage.setItem(KEY, JSON.stringify(classes));
+  } catch(e) { console.warn('save failed', e); }
+}
+
+/* ---------- Rendering ---------- */
+
+function renderCalendar() {
+  const root = document.getElementById('calendar');
+  root.innerHTML = '';
+  // header row showing slots
+  const container = document.createElement('div');
+  container.className = 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4';
+
+  DAYS.forEach(day => {
+    const col = document.createElement('div');
+    col.className = 'bg-white/80 backdrop rounded-2xl p-4 shadow-md';
+    const h = document.createElement('h3'); h.className = 'font-semibold mb-3'; h.textContent = day;
+    col.appendChild(h);
+
+    const items = classes.filter(c => c.day === day).sort((a,b) => a.start.localeCompare(b.start));
+    if (!items.length) {
+      const p = document.createElement('p'); p.className = 'text-xs text-gray-500'; p.textContent = 'No classes';
+      col.appendChild(p);
+    } else {
+      items.forEach(c => {
+        const card = document.createElement('div');
+        card.className = 'mb-3 p-3 rounded-lg border hover:shadow-sm cursor-pointer';
+        card.addEventListener('click', ()=> openDetailsModal(c));
+
+        const top = document.createElement('div'); top.className = 'flex justify-between items-start';
+        const left = document.createElement('div');
+        const title = document.createElement('div'); title.className = 'font-bold'; title.textContent = c.subject;
+        const sub = document.createElement('div'); sub.className = 'text-xs text-gray-600';
+        sub.textContent = (c.lecturer || c.professor || mapProfessorBySubject(c.subject) || 'TBA') + ' · Room ' + (c.room || 'TBA');
+        left.appendChild(title); left.appendChild(sub);
+
+        const time = document.createElement('div'); time.className = 'text-sm font-mono'; time.textContent = c.start + ' - ' + c.end;
+        top.appendChild(left); top.appendChild(time);
+
+        const bottom = document.createElement('div'); bottom.className = 'mt-2 flex items-center justify-between';
+        const actions = document.createElement('div'); actions.className = 'flex gap-2';
+        const editBtn = document.createElement('button'); editBtn.className='text-xs px-2 py-1 border rounded'; editBtn.textContent='Edit';
+        editBtn.addEventListener('click', (e)=>{ e.stopPropagation(); openAddEditModal(c); });
+        const delBtn = document.createElement('button'); delBtn.className='text-xs px-2 py-1 border rounded'; delBtn.textContent='Delete';
+        delBtn.addEventListener('click', (e)=>{ e.stopPropagation(); deleteClass(c.id); });
+        const detailsBtn = document.createElement('button'); detailsBtn.className='text-xs px-2 py-1 border rounded'; detailsBtn.textContent='Details';
+        detailsBtn.addEventListener('click', (e)=>{ e.stopPropagation(); openDetailsModal(c); });
+
+        actions.appendChild(editBtn); actions.appendChild(delBtn); actions.appendChild(detailsBtn);
+
+        const badge = document.createElement('div'); badge.className='text-xs px-2 py-1 rounded-full border bg-white/70'; badge.textContent = c.type || 'Class';
+
+        bottom.appendChild(actions); bottom.appendChild(badge);
+
+        card.appendChild(top); card.appendChild(bottom);
+        col.appendChild(card);
+      });
+    }
+    container.appendChild(col);
+  });
+
+  root.appendChild(container);
+}
+
+/* ---------- Modal helpers ---------- */
+
+function openAddEditModal(item=null) {
+  renderModal(`
+    <div class="fixed inset-0 flex items-center justify-center z-50">
+      <div class="absolute inset-0 bg-black/40" onclick="document.getElementById('modalRoot').innerHTML = ''"></div>
+      <form id="classForm" class="relative p-6 bg-white rounded-2xl shadow-xl w-full max-w-lg" onsubmit="return window.__submitClassForm(event)">
+        <h3 class="text-lg font-semibold mb-3">${item ? 'Edit Class' : 'Add Class'}</h3>
+        <div class="grid grid-cols-2 gap-3">
+          <input name="subject" placeholder="Subject" class="col-span-2 border p-2 rounded" value="${item ? escapeHtml(item.subject) : ''}" required />
+          <input name="professor" placeholder="Professor" class="border p-2 rounded" value="${item ? escapeHtml(item.professor) : ''}" />
+          <input name="lecturer" placeholder="Lecturer (optional)" class="border p-2 rounded" value="${item ? escapeHtml(item.lecturer) : ''}" />
+          <input name="room" placeholder="Room" class="border p-2 rounded" value="${item ? escapeHtml(item.room) : ''}" />
+          <select name="type" class="border p-2 rounded">
+            <option ${!item || !item.type ? 'selected' : ''} value="">Select type</option>
+            <option value="Lecture" ${item && item.type==='Lecture' ? 'selected':''}>Lecture</option>
+            <option value="Practical" ${item && item.type==='Practical' ? 'selected':''}>Practical</option>
+            <option value="Skill" ${item && item.type==='Skill' ? 'selected':''}>Skill</option>
+            <option value="Tutorial" ${item && item.type==='Tutorial' ? 'selected':''}>Tutorial</option>
+            <option value="Lab" ${item && item.type==='Lab' ? 'selected':''}>Lab</option>
+          </select>
+          <select name="day" class="border p-2 rounded">
+            ${DAYS.map(d => `<option value="${d}" ${item && item.day===d ? 'selected':''}>${d}</option>`).join('')}
+          </select>
+          <input type="time" name="start" class="border p-2 rounded" required value="${item ? item.start : '09:00'}" />
+          <input type="time" name="end" class="border p-2 rounded" required value="${item ? item.end : '10:00'}" />
+        </div>
+
+        <div class="mt-4 flex justify-end gap-3">
+          <button type="button" onclick="document.getElementById('modalRoot').innerHTML = ''" class="px-4 py-2">Cancel</button>
+          <button type="submit" class="px-4 py-2 bg-violet-600 text-white rounded">Save</button>
+        </div>
+      </form>
+    </div>
+  `);
+
+  // bind submit handler
+  window.__submitClassForm = function(e) {
+    e.preventDefault();
+    const fd = new FormData(e.target);
+    const data = Object.fromEntries(fd.entries());
+    const autoProf = mapProfessorBySubject(data.subject || '');
+    const cls = {
+      id: item ? item.id : String(Date.now()),
+      subject: data.subject || 'Untitled',
+      professor: (data.professor||'').trim() || autoProf || '',
+      lecturer: (data.lecturer||'').trim() || (data.professor||'').trim() || autoProf || '',
+      room: data.room || '',
+      type: data.type || '',
+      day: data.day,
+      start: data.start,
+      end: data.end
+    };
+    // upsert
+    classes = classes.filter(c => c.id !== cls.id);
+    classes.push(cls);
+    classes.sort((a,b)=> a.day.localeCompare(b.day) || a.start.localeCompare(b.start));
+    saveClasses();
+    scheduleAllReminders();
+    renderCalendar();
+    document.getElementById('modalRoot').innerHTML = '';
+    return false;
+  };
+}
+
+function openDetailsModal(c) {
+  renderModal(`
+    <div class="fixed inset-0 flex items-center justify-center z-50">
+      <div class="absolute inset-0 bg-black/40" onclick="document.getElementById('modalRoot').innerHTML = ''"></div>
+      <div class="relative p-6 bg-white rounded-2xl shadow-xl w-full max-w-md z-10">
+        <button onclick="document.getElementById('modalRoot').innerHTML = ''" class="absolute right-3 top-3 text-lg">×</button>
+        <h3 class="text-xl font-semibold mb-2">${escapeHtml(c.subject)}</h3>
+        <div class="text-sm text-gray-700 space-y-2">
+          <div><strong>Type:</strong> ${escapeHtml(c.type || 'TBA')}</div>
+          <div><strong>Professor:</strong> ${escapeHtml(c.professor || mapProfessorBySubject(c.subject) || 'TBA')}</div>
+          <div><strong>Lecturer:</strong> ${escapeHtml(c.lecturer || c.professor || mapProfessorBySubject(c.subject) || 'TBA')}</div>
+          <div><strong>Room:</strong> ${escapeHtml(c.room || 'TBA')}</div>
+          <div><strong>Slot / Time:</strong> ${escapeHtml(c.start)} - ${escapeHtml(c.end)} (${escapeHtml(c.day)})</div>
+        </div>
+      </div>
+    </div>
+  `);
+}
+
+/* helper to write modal content */
+function renderModal(html) {
+  document.getElementById('modalRoot').innerHTML = html;
+}
+
+/* basic html escaper */
+function escapeHtml(s='') { return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;'); }
+
+/* ---------- CRUD ---------- */
+
+function deleteClass(id) {
+  if (!confirm('Delete this class?')) return;
+  classes = classes.filter(c => c.id !== id);
+  saveClasses();
+  renderCalendar();
+  scheduleAllReminders();
+}
+
+/* ---------- Webhook & Notifications ---------- */
+
+function requestPermission() {
+  if (!('Notification' in window)) return alert('This browser does not support notifications.');
+  Notification.requestPermission().then(p=>{
+    if (p==='granted') showToast('Notifications enabled');
+    else showToast('Notifications blocked');
+  });
+}
+
+async function postWebhook(payload) {
+  const url = (document.getElementById('webhookInput').value||'').trim();
+  const secret = (document.getElementById('secretInput').value||'').trim();
+  if (!url) return;
+  try {
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(secret ? {'x-tt-secret': secret} : {}) },
+      body: JSON.stringify(payload)
+    });
+  } catch (e) {
+    console.warn('webhook failed', e);
+  }
+}
+
+/* ---------- Scheduling reminders ---------- */
+
+function minutesUntil(date) { return Math.max(0, date.getTime() - Date.now()); }
+
+function scheduleReminderForClass(c) {
+  // clear existing timer
+  if (timers[c.id]) { clearTimeout(timers[c.id]); delete timers[c.id]; }
+
+  // compute next occurrence for this class
+  const now = new Date();
+  let target = new Date(now);
+  let found=false;
+  for (let add=0; add<7; add++){
+    const d = new Date(now); d.setDate(now.getDate()+add);
+    const weekday = d.toLocaleDateString(undefined, {weekday:'long'});
+    if (weekday === c.day) { target.setDate(d.getDate()); found=true; break; }
+  }
+  if (!found) return;
+
+  // set time
+  const [hh,mm]= c.start.split(':').map(x=>Number(x));
+  target.setHours(hh); target.setMinutes(mm); target.setSeconds(0); target.setMilliseconds(0);
+
+  const offset = Number(document.getElementById('offsetInput').value || 10);
+  const fireAt = new Date(target.getTime() - offset*60*1000);
+  if (fireAt.getTime() <= Date.now()) {
+    fireAt.setDate(fireAt.getDate() + 7);
+  }
+
+  const ms = minutesUntil(fireAt);
+  timers[c.id] = setTimeout(async ()=>{
+    // show notification
+    const title = `Upcoming: ${c.subject} @ ${c.room}`;
+    const body = `${c.type ? c.type + ' - ' : ''}${c.lecturer || c.professor || 'Instructor'} — starts at ${c.start}`;
+    if (Notification && Notification.permission === 'granted') {
+      new Notification(title, { body });
+    } else {
+      alert(title + '\n' + body);
+    }
+
+    // post webhook
+    await postWebhook({ subject: c.subject, professor: c.professor, lecturer: c.lecturer, type: c.type, room: c.room, start: c.start, day: c.day, message: `${c.subject} (${c.type}) with ${c.lecturer || c.professor} in ${c.room} at ${c.start}` });
+
+    // schedule next week
+    scheduleReminderForClass(c);
+  }, ms);
+}
+
+function scheduleAllReminders() {
+  Object.values(timers).forEach(t => clearTimeout(t));
+  timers = {};
+  classes.forEach(scheduleReminderForClass);
+}
+
+/* ---------- UI wiring & boot ---------- */
+
+document.getElementById('addBtn').addEventListener('click', ()=> openAddEditModal(null));
+document.getElementById('notifyPermission').addEventListener('click', requestPermission);
+document.getElementById('testWebhook').addEventListener('click', async ()=>{
+  saveSettingsFromUI();
+  const url = document.getElementById('webhookInput').value.trim();
+  if (!url) return alert('Set webhook URL first');
+  await postWebhook({ test: true, message: 'Test from Live Timetable' });
+  showToast('Webhook test sent');
+});
+document.getElementById('clearStorage').addEventListener('click', ()=>{
+  if (!confirm('Clear saved timetable from this browser?')) return;
+  localStorage.removeItem(KEY);
+  localStorage.removeItem(WH_KEY);
+  localStorage.removeItem(OFF_KEY);
+  location.reload();
+});
+document.getElementById('exportJson').addEventListener('click', ()=>{
+  const a = document.createElement('a');
+  const blob = new Blob([JSON.stringify(classes, null, 2)], {type:'application/json'});
+  a.href = URL.createObjectURL(blob);
+  a.download = 'timetable.json';
+  document.body.appendChild(a); a.click(); a.remove();
+});
+
+/* load initial data and render */
+loadSettingsToUI();
+loadClasses();
+renderCalendar();
+scheduleAllReminders();
+
+/* keep settings saved when changed */
+document.getElementById('webhookInput').addEventListener('change', saveSettingsFromUI);
+document.getElementById('secretInput').addEventListener('change', saveSettingsFromUI);
+document.getElementById('offsetInput').addEventListener('change', ()=>{
+  saveSettingsFromUI();
+  scheduleAllReminders();
+});
+
+</script>
+</body>
+</html>
